@@ -649,6 +649,8 @@ void run_cudnn_SDP_fprop(
     return;
   }
 
+  TORCH_CHECK(false);
+
   auto key = MHACacheKeyWrapper(
       b,
       h,
