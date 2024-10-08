@@ -634,6 +634,13 @@ void run_cudnn_SDP_fprop(
     Tensor& dropoutseed,
     Tensor& dropoutoffset) {
   cudnnHandle_t handle = getCudnnHandle();
+  if (q.is_nested()) {
+    TORCH_WARN("nested");
+    TORCH_WARN(q.layout());
+    //TORCH_WARN(q.strides());
+    TORCH_WARN(at::native::_nested_tensor_strides(q));
+  }
+
   if (!o.defined()) {
     // q is passed to us in BHSD dim order
     alloc_with_matching_layout(q, o, {b, h, s_q, d_v});
