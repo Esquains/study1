@@ -5884,6 +5884,46 @@ class TestNestedTensorSubclass(NestedTensorTestCase):
                 nt.values()[nt.offsets()[i] : (nt.offsets()[i] + nt.lengths()[i])],
             )
 
+    @dtypes(torch.float32)
+    @parametrize("compiled", [False, True])
+    def test_narrow_on_batch_dim(self, device, dtype, compiled):
+        nt = torch.nested.nested_tensor([
+            torch.randn(2, 5, device=device, dtype=dtype),
+            torch.randn(3, 5, device=device, dtype=dtype),
+            torch.randn(4, 5, device=device, dtype=dtype),
+            torch.randn(6, 5, device=device, dtype=dtype),
+            torch.randn(7, 5, device=device, dtype=dtype),
+        ], layout=torch.jagged, requires_grad=True)
+
+        def f(nt, start, length):
+            return nt.narrow(0, start, length)
+
+        if compiled:
+            torch._dynamo.config.capture_scalar_outputs = True
+            f = torch.compile(f, fullgraph=True)
+
+        # first few batch items
+        out1 = f(nt, 0, 2)
+        self.assertEqual(out1.shape[0], 2)
+        for out1_comp, nt_comp in zip(out1.unbind(), nt.unbind()[0:2]):
+            self.assertEqual(out1_comp, nt_comp)
+
+        # some middle batch items
+        out2 = f(nt, 1, 3)
+        self.assertEqual(out2.shape[0], 3)
+        for out2_comp, nt_comp in zip(out2.unbind(), nt.unbind()[1:4]):
+            self.assertEqual(out2_comp, nt_comp)
+
+        # last few batch items
+        out3 = f(nt, 2, 3)
+        self.assertEqual(out3.shape[0], 3)
+        for out3_comp, nt_comp in zip(out3.unbind(), nt.unbind()[2:5]):
+            self.assertEqual(out3_comp, nt_comp)
+
+        # length past the end
+        with self.assertRaisesRegex(RuntimeError, "exceeds dimension size"):
+            out4 = f(nt, 3, 3)
+
     def test_njt_cat(self, device):
         offsets = torch.tensor([0, 2, 3], device=device, dtype=torch.int64)
         values_1 = torch.randn(
