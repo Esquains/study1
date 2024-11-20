@@ -2726,6 +2726,7 @@ class TestSDPACudaOnly(NNTestCase):
         self.assertEqual(actual.contiguous(), math_ref.contiguous(), atol=2e-3, rtol=1e-2)
 
     @unittest.skipIf(not PLATFORM_SUPPORTS_CUDNN_ATTENTION, "Fused SDPA was not built for this system")
+    @unittest.skipIf(not "TORCH_CUDNN_SDPA_NESTED_TENSOR_ENABLED" in os.environ, "cuDNN Nested Tensor support not enabled")
     @parametrize("type", ["nested"])
     @parametrize("is_contiguous", [True])
     def test_scaled_dot_product_attention_cudnn_nested(self, device, type: str, is_contiguous: bool):
@@ -2756,7 +2757,6 @@ class TestSDPACudaOnly(NNTestCase):
             math_ref = torch.nn.functional.scaled_dot_product_attention(
                 query.contiguous(), key.contiguous(), value.contiguous(),
                 attn_mask=None, dropout_p=0.0, is_causal=False)
-        print(actual[0, 0, 32, :], math_ref[0, 0, 32, :])
         self.assertEqual(actual.contiguous(), math_ref.contiguous(), atol=2e-3, rtol=1e-2)
 
     @skipIfRocm  # Missing nested and EFFICIENT_ATTENTION

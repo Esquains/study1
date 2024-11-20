@@ -513,11 +513,19 @@ bool check_cudnn_hardware_support(sdp_params const& params, bool debug) {
 }
 
 bool check_for_nested_inputs(sdp_params const& params, bool debug) {
+  static const bool enable_cudnn_nested = c10::utils::check_env("TORCH_CUDNN_SDPA_NESTED_TENSOR_ENABLED") == true;
+  if (!enable_cudnn_nested) {
+    if (debug) {
+      TORCH_WARN("Experimental cuDNN SDPA nested tensor support is not enabled.");
+    }
+    return false;
+  }
+
   const auto dprop = at::cuda::getCurrentDeviceProperties();
   // Check that the input is nested
   if (dprop->major != 9 && has_for_nested_inputs(params)) {
     if (debug) {
-      TORCH_WARN("CuDNN currently does not support nested inputs.");
+      TORCH_WARN("CuDNN SDPA supports nested tensors on SM 9.0.");
     }
     return false;
   }

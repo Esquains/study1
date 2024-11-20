@@ -558,10 +558,6 @@ auto build_graph_and_tensors_nestedtensor(
 	  .set_seq_len_q(SEQ_LEN_Q)
           .set_seq_len_kv(SEQ_LEN_KV)
 	  .set_padding_mask(true);
-  TORCH_WARN("IS CAUSAL", is_causal);
-  TORCH_WARN("NESTED STRIDE Q", q.strides());
-  TORCH_WARN("NESTED STRIDE K", k.strides());
-  TORCH_WARN("NESTED_STRIDE V", v.strides());
   // We hardcode BSHD to cuDNN even though the underlying layout is THD
   auto q_strides = q.strides();
   auto k_strides = k.strides();
@@ -573,29 +569,17 @@ auto build_graph_and_tensors_nestedtensor(
       fe::graph::Tensor_attributes()
           .set_name("Q")
 	  .set_dim({b, h_q, s_q, d_qk})
-	  // .set_stride({s_q * h_q * d_qk, h_q * d_qk, d_qk, 1}));
-	  //.set_stride({h_q * s_q * d_qk, s_q * d_qk, d_qk, 1}));
 	  .set_stride({INT_MAX, q_strides[strideidx0], q_strides[strideidx1], q_strides[strideidx2]}));
-          //.set_dim(q.sizes().vec())
-          //.set_stride(fixSizeOneDimStrideSDPA(q.sizes(), q.strides().vec())));
   auto K = mha_graph->tensor(
       fe::graph::Tensor_attributes()
           .set_name("K")
 	  .set_dim({b, h_k, s_kv, d_qk})
-	  //.set_stride({s_kv * h_k * d_qk, h_k * d_qk, d_qk, 1}));
-	  //.set_stride({h_k * s_kv * d_qk, s_kv * d_qk, d_qk, 1}));
 	  .set_stride({INT_MAX, k_strides[strideidx0], k_strides[strideidx1], k_strides[strideidx2]}));
-          //.set_dim(k.sizes().vec())
-          //.set_stride(fixSizeOneDimStrideSDPA(k.sizes(), k.strides().vec())));
   auto V = mha_graph->tensor(
       fe::graph::Tensor_attributes()
           .set_name("V")
 	  .set_dim({b, h_v, s_kv, d_v})
-	  //.set_stride({s_kv * h_v * d_v, h_v * d_v, d_v, 1}));
-	  //.set_stride({h_k * s_kv * d_v, s_kv * d_v, d_v, 1}));
 	  .set_stride({INT_MAX, v_strides[strideidx0], v_strides[strideidx1], v_strides[strideidx2]}));
-          //.set_dim(v.sizes().vec())
-          //.set_stride(fixSizeOneDimStrideSDPA(v.sizes(), v.strides().vec())));
   std::optional<std::shared_ptr<fe::graph::Tensor_attributes>> bias;
   if (attn_bias.has_value()) {
     TORCH_CHECK(false, "attn_bias not yet supportd with cuDNN Attention and NestedTensor");
@@ -638,16 +622,11 @@ auto build_graph_and_tensors_nestedtensor(
   auto [O, Stats] =
       mha_graph->sdpa(Q, K, V, scaled_dot_product_flash_attention_options);
   auto o_strides = o.strides();
-  TORCH_WARN("O STRIDE", o.strides());
-  //O->set_output(true).set_dim(o.sizes().vec()).set_stride(o.strides().vec());
-  //O->set_output(true).set_dim({b, h_q, s_q, d_v}).set_stride({s_q * h_q * d_v, h_q * d_v, d_v, 1});
-  //O->set_output(true).set_dim({b, h_q, s_q, d_v}).set_stride({h_q * s_q * d_v, s_q * d_v, d_v, 1});
   O->set_output(true).set_dim({b, h_q, s_q, d_v}).set_stride({INT_MAX, o_strides[strideidx0], o_strides[strideidx1], o_strides[strideidx2]});
 
   O->set_ragged_offset(RAG_O_OFF); 
   if (Stats) {
-    //Stats->set_output(true).set_data_type(fe::DataType_t::FLOAT).set_dim({b, h_q, s_q, 1}).set_stride({s_q * h_q * d_v, d_v, h_q * d_v, 1});
-    // TODO(eqy): fix 
+    // TODO(eqy): fix  when stats (backward) support is added
     Stats->set_output(true).set_data_type(fe::DataType_t::FLOAT).set_dim({b, h_q, s_q, 1}).set_stride({h_q * s_q * d_v, d_v, s_q * d_v, 1});
     Stats->set_ragged_offset(RAG_STATS_OFF);
   }
@@ -922,7 +901,6 @@ void run_cudnn_SDP_fprop_nestedtensor(
     Tensor& o,
     Tensor& dropoutseed,
     Tensor& dropoutoffset) {
-  TORCH_WARN(" I AM RUNNING WITH B ", b, " HQ ", h_q, " HK ", h_k, " HV ", h_v,  " S ", s_q, " SKV ", s_kv, " D_QK ", d_qk, " D_V ", d_v);
   cudnnHandle_t handle = getCudnnHandle();
 
   // do nothing if we got 0-element tensors
@@ -933,9 +911,6 @@ void run_cudnn_SDP_fprop_nestedtensor(
   if (!o.defined()) {
     o = at::empty({q.size(0), h_q, d_v}, q.options());
   }
-
-  TORCH_WARN("CUDNN OUTPUT SHAPE ", o.sizes());
-
 
   if (return_softmaxstats && !softmaxstats.defined()) {
     softmaxstats = at::empty({q.size(0), h_q, 1}, q.options().dtype(kFloat));
@@ -983,10 +958,12 @@ void run_cudnn_SDP_fprop_nestedtensor(
     dropoutseed,
     dropoutoffset,
     handle);
-  TORCH_WARN("BUILT GRAPH??");
-
   auto seqlen_q = at::diff(cum_seqlen_q, 1, 0);
   auto seqlen_kv = at::diff(cum_seqlen_kv, 1, 0);
+  auto rag_q_off = cum_seqlen_q.mul(h_q * d_qk);
+  auto rag_k_off = cum_seqlen_kv.mul(h_k * d_qk);
+  auto rag_v_off = cum_seqlen_kv.mul(h_v * d_v);
+  auto rag_stats_off = cum_seqlen_q.mul(h_q);
   std::unordered_map<std::shared_ptr<fe::graph::Tensor_attributes>, void*>
       variant_pack = {
           {Q, q.data_ptr()},
@@ -996,30 +973,24 @@ void run_cudnn_SDP_fprop_nestedtensor(
           {seed, dropoutseed.data_ptr()},
           {offset, dropoutoffset.data_ptr()},
           {O, o.data_ptr()},
-          {RAG_Q_OFF, cum_seqlen_q.data_ptr()},
-          {RAG_O_OFF, cum_seqlen_q.data_ptr()},
-          {RAG_K_OFF, cum_seqlen_kv.data_ptr()},
-          {RAG_V_OFF, cum_seqlen_kv.data_ptr()},
+          {RAG_Q_OFF, rag_q_off.data_ptr()},
+          {RAG_O_OFF, rag_q_off.data_ptr()},
+          {RAG_K_OFF, rag_k_off.data_ptr()},
+          {RAG_V_OFF, rag_v_off.data_ptr()},
           {SEQ_LEN_Q, seqlen_q.data_ptr()},
           {SEQ_LEN_KV, seqlen_kv.data_ptr()}};
   if (return_softmaxstats) {
-    TORCH_WARN("STATS");
     variant_pack[Stats] = softmaxstats.data_ptr();
     variant_pack[RAG_STATS_OFF] =  cum_seqlen_q.data_ptr();
   }
   if (attn_bias.has_value()) {
      TORCH_CHECK("bias not supported with nestedtensor");
   }
-  TORCH_WARN(" SCALAR TYPES?? ", cum_seqlen_q.scalar_type(), " ", cum_seqlen_kv.scalar_type());
-  TORCH_WARN(cum_seqlen_q);
-  TORCH_WARN("DIFF ?", seqlen_q, seqlen_kv);
   auto workspace_size = mha_graph->get_workspace_size();
   auto workspace_ptr =
       c10::cuda::CUDACachingAllocator::get()->allocate(workspace_size);
-  TORCH_WARN("STARTING EXEC");
   TORCH_CHECK(
       mha_graph->execute(handle, variant_pack, workspace_ptr.get()).is_good());
-  TORCH_WARN("FINISHED XEC");
 }
 
 void run_cudnn_SDP_bprop(

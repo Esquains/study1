@@ -430,9 +430,7 @@ _scaled_dot_product_cudnn_attention_nestedtensor_cuda(
                                    attention/*Tensor o*/,
                                    cudnn_seed/*Tensor dropoutseed*/,
                                    cudnn_offset/*Tensor dropoutoffset*/);
-  TORCH_WARN("OUTPUT SHAPE", output_shape)
   attention = wrap_buffer(attention.view(-1), output_shape).transpose(1, 2);
-  TORCH_WARN("OUTPUT ATTN SHAPE",  get_nested_tensor_impl(attention)->get_nested_sizes());
   return std::make_tuple(std::move(attention), std::move(log_sumexp), cumulative_sequence_length_q, cumulative_sequence_length_kv, max_seqlen_batch_q, max_seqlen_batch_kv, std::move(cudnn_seed), std::move(cudnn_offset), Tensor());
 }
 
