@@ -513,8 +513,9 @@ bool check_cudnn_hardware_support(sdp_params const& params, bool debug) {
 }
 
 bool check_for_nested_inputs(sdp_params const& params, bool debug) {
+  const auto dprop = at::cuda::getCurrentDeviceProperties();
   // Check that the input is nested
-  if (has_for_nested_inputs(params)) {
+  if (dprop->major != 9 && has_for_nested_inputs(params)) {
     if (debug) {
       TORCH_WARN("CuDNN currently does not support nested inputs.");
     }
@@ -580,7 +581,7 @@ bool can_use_cudnn_attention(const sdp_params& params, bool debug) {
   constexpr auto general_constraints =
       array_of<bool (*)(sdp_params const&, bool)>(
           check_runtime_disabled_cudnn,
-          // check_for_nested_inputs,
+          check_for_nested_inputs,
           check_nonzero_sequence_lengths_dense,
           check_all_tensors_on_device,
           check_tensor_shapes,
