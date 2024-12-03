@@ -461,8 +461,8 @@ ctc_loss_backward_collect_nonblank_gpu_kernel(scalar_t* __restrict__ gradient_da
                                                      int64_t lb_batch_stride, int64_t lb_input_stride, int64_t lb_target_stride,
                                                      const int64_t* __restrict__ tg_batch_offsets, int64_t tg_target_stride,
                                               int64_t batch_size, bool zero_infinity) {
-  int64_t b = threadIdx.y + blockIdx.y * blockDim.y;
-  int64_t s = threadIdx.x + blockIdx.x * blockDim.x; // note, this directly indexes into targets, not targets prime!
+  int64_t b = threadIdx.y + ((int64_t) blockIdx.y) * blockDim.y;
+  int64_t s = threadIdx.x + ((int64_t) blockIdx.x) * blockDim.x; // note, this directly indexes into targets, not targets prime!
 
   if (b >= batch_size)
     return;
@@ -515,8 +515,8 @@ ctc_loss_backward_collect_gpu_kernel(scalar_t* __restrict__ gradient_data,
                                      int64_t batch_size, int64_t num_labels, int64_t BLANK, bool zero_infinity) {
 
   constexpr scalar_t neginf = -INFINITY;
-  int64_t b = threadIdx.y + blockIdx.y * blockDim.y;
-  int64_t t = threadIdx.x + blockIdx.x * blockDim.x;
+  int64_t b = threadIdx.y + ((int64_t) blockIdx.y) * blockDim.y;
+  int64_t t = threadIdx.x + ((int64_t) blockIdx.x) * blockDim.x;
 
   if ((t >= max_input_length) || (b >= batch_size))
     return;
@@ -582,8 +582,8 @@ ctc_loss_zero_padded_gradients(
     int64_t max_input_length, /* T */
     int64_t batch_size, /* B */
     int64_t num_labels  /* D */ ) {
-      int64_t b = threadIdx.y + blockIdx.y * blockDim.y;
-      int64_t t = threadIdx.x + blockIdx.x * blockDim.x;
+      int64_t b = threadIdx.y + ((int64_t) blockIdx.y) * blockDim.y;
+      int64_t t = threadIdx.x + ((int64_t) blockIdx.x) * blockDim.x;
 
       if (b >= batch_size || t >= max_input_length) {
         return;
