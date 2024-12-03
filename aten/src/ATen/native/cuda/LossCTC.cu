@@ -87,7 +87,7 @@ ctc_loss_log_alpha_gpu_kernel(scalar_t* __restrict__ log_alpha_data,
   constexpr scalar_t neginf = -INFINITY;
 
   // bookkeeping
-  int64_t b = threadIdx.y + blockIdx.y * blockDim.y;
+  int64_t b = threadIdx.y + ((int64_t) blockIdx.y) * blockDim.y;
   int64_t input_length = input_lengths[b];
   int64_t target_length = target_lengths[b];
   int64_t lp_batch_offset = b*lp_batch_stride;
@@ -328,7 +328,7 @@ ctc_loss_backward_log_beta_gpu_kernel(scalar_t* __restrict__ log_beta_data,
                                       int64_t batch_size, int64_t BLANK) {
   constexpr scalar_t neginf = -INFINITY;
 
-  int64_t b = threadIdx.y + blockIdx.y * blockDim.y;
+  int64_t b = threadIdx.y + ((int64_t) blockIdx.y) * blockDim.y;
 
   if (b >= batch_size)
     return;
