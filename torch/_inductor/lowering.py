@@ -2361,6 +2361,13 @@ def sdpa_constraint(fx_node, *args, **kwargs):
         # This value can be found in pytorch/aten/src/ATen/native/transformers/attention.cpp preprocess_mask
         ALIGNMENT = 8
 
+        # effn_attn_fwd does requires dense last dim, not just alignment
+        effn_attn_fwd_bias = (
+            fx_node.target
+            == torch.ops.aten._scaled_dot_product_efficient_attention.default
+            and idx == 3
+        )
+
         assert isinstance(arg, TensorBox)
         if len(arg.get_size()) not in (3, 4):
             return arg
@@ -2371,9 +2378,9 @@ def sdpa_constraint(fx_node, *args, **kwargs):
                 for i in range(len(x.get_stride()) - 1)
             )
             # if the last dim size is <= 1, stride doesnt matter
-            aligned_last_dim = (
-                V.graph.sizevars.size_hint(x.get_stride()[-1]) == 1
-                or V.graph.sizevars.size_hint(x.get_size()[-1]) <= 1
+            aligned_last_dim = V.graph.sizevars.size_hint(x.get_stride()[-1]) == 1 or (
+                V.graph.sizevars.size_hint(x.get_size()[-1]) <= 1
+                and not effn_attn_fwd_bias
             )
             return aligned_last_dim and aligned_strides
 
@@ -2382,9 +2389,48 @@ def sdpa_constraint(fx_node, *args, **kwargs):
             and arg.maybe_get_stride() is not None
             and is_aligned_realized_tensor(arg)
         ):
-            return V.graph.try_match_insignificant_strides(
-                ir.ExternKernel.realize_input(arg), meta_stride
+            meta_strides_expr = [
+                s.node.expr if isinstance(s, torch.SymInt) else s for s in meta_stride
+            ]
+            return ir.try_match_insignificant_strides(
+                ir.ExternKernel.realize_input(arg), meta_strides_expr
             )
+
+        if effn_attn_fwd_bias:
+            orig_size = list(arg.get_size())
+            out_size = list(arg.get_size())
+
+            expanded_dims = []
+            if arg.maybe_get_stride() is not None:
+                # We require a dense last dimension, but the other strides
+                # can be expanded, which results in a smaller tensor that gets
+                # written out.
+                for i, s in enumerate(arg.get_stride()[0:-1]):
+                    if V.graph.sizevars.statically_known_equals(s, 0):
+                        expanded_dims.append(i)
+
+            # Now, pad strides to alignment
+            out_strides = [-1 for _ in range(len(out_size))]
+            out_strides[-1] = 1
+            stride = 1
+            for i in range(len(out_size) - 2, -1, -1):
+                if out_strides[i + 1] != 0:
+                    stride = stride * out_size[i + 1]
+
+                # the expanded dims still need to be aligned, if they are,
+                # we can make them expanded by setting the stride equal to 0
+                if i in expanded_dims:
+                    if V.graph.sizevars.statically_known_equals(
+                        out_strides[i + 1] % ALIGNMENT, 0
+                    ):
+                        out_strides[i] = 0
+                        continue
+
+                if not V.graph.sizevars.statically_known_equals(stride % ALIGNMENT, 0):
+                    stride = ceildiv(stride, ALIGNMENT) * ALIGNMENT
+
+                out_strides[i] = stride
+            return ir.ExternKernel.require_exact_strides(arg, out_strides)
 
         def is_aligned(x):
             return (V.graph.sizevars.size_hint(x.get_size()[-1]) % ALIGNMENT) == 0
@@ -2392,7 +2438,11 @@ def sdpa_constraint(fx_node, *args, **kwargs):
         if isinstance(arg.data, ir.BaseView):
             if not is_aligned(arg):
                 if is_aligned(arg.unwrap_view()):
-                    return V.graph.try_match_insignificant_strides(
+                    meta_strides_expr = [
+                        s.node.expr if isinstance(s, torch.SymInt) else s
+                        for s in meta_stride
+                    ]
+                    return ir.try_match_insignificant_strides(
                         ir.ExternKernel.realize_input(arg), meta_stride
                     )
 
