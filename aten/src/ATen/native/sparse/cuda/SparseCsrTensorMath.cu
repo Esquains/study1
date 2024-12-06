@@ -51,7 +51,7 @@ namespace {
 
 template <typename input_t, typename output_t>
 __global__ void convert_indices_from_coo_to_csr_cuda_kernel(output_t* data_out, const input_t* data_in, const int64_t size, const int64_t numel) {
-  int64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
+  int64_t tid = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   if (tid == 0) {
     for (int64_t i = 0; i <= data_in[0]; i++)
       data_out[i] = static_cast<output_t>(0);
@@ -85,7 +85,7 @@ void convert_indices_from_coo_to_csr_cuda(const Tensor& result, const Tensor& in
 
 template <typename input_t, typename output_t>
 __global__ void convert_indices_from_csr_to_coo_cuda_kernel(output_t* data_out, const input_t* data_in, const int64_t nrows, const int64_t nnz, const int64_t nbatches) {
-  int64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
+  int64_t tid = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
 
   if (tid < nrows * nbatches) {
     int64_t b = tid / nrows;
@@ -416,7 +416,7 @@ __global__ void reduce_sparse_csr_dim0_cuda_kernel(acc_t* new_values,
                                                    const int64_t nnz,
                                                    ReductionOp rop
                                                    ) {
-  int64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
+  int64_t tid = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   if (tid < new_nnz) {
     index_t col = new_col_indices[tid];
     acc_t v = rop.identity();
@@ -544,7 +544,7 @@ __global__ void reduce_sparse_csr_dim1_cuda_kernel(acc_t* new_values,
                                                    const int64_t nrows,
                                                    ReductionOp rop
                                                    ) {
-  int64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
+  int64_t tid = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   if (tid < nrows) {
     index_t i_start = crow_indices[tid];
     index_t i_end = crow_indices[tid+1];
