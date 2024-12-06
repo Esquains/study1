@@ -24,6 +24,7 @@ import torch.fx as fx
 import torch.utils._pytree as pytree
 from torch import SymInt, Tensor
 from torch._C import DispatchKey
+from torch._dynamo.variables.lazy import LazyVariableTracker, VariableTracker
 from torch._ops import HigherOrderOperator
 from torch._prims_common import clone_preserve_strides
 from torch._subclasses.fake_tensor import FakeTensorMode
@@ -1169,7 +1170,7 @@ class TritonHOPifier:
         tx: Optional["InstructionTranslator"],
     ) -> Optional["ConstantVariable"]:
         from triton import JITFunction
-        from triton.runtime.autotuner import autotune, Autotuner, Config
+        from triton.runtime.autotuner import autotune, Autotuner, Config, Heuristics
 
         SPECIAL_CONFIG_NAMES = {"num_warps", "num_stages", "num_ctas"}
 
@@ -1178,6 +1179,68 @@ class TritonHOPifier:
                 "Passing num_ctas directly to the Triton kernel is not supported. "
                 "Please use a Config in @triton.autotune instead."
             )
+
+        # run @heuristics to populate kwargs
+        # heuristics decorator always is nested beneath the autotuner decorator
+        if isinstance(variable.kernel.fn, Heuristics):
+            # args and kwargs aren't real values yet
+            # e.g., LazyVariableTracker
+            # If a user wants to access them, we should realize them
+            def maybe_lazy_unwrap(
+                var: LazyVariableTracker | VariableTracker,
+            ) -> Union[Any, VariableTracker, LazyVariableTracker]:
+                while isinstance(var, VariableTracker) and hasattr(var, "realize"):
+                    var = var.realize()
+                if hasattr(var, "value"):
+                    # if we can return the value, do it
+                    return var.value
+                elif hasattr(var, "get_real_value"):
+                    return var.get_real_value()
+                else:
+                    return var
+
+            # we want to lazily realize values if possible
+            class LazyRealizeArgsKwargs(dict):
+                def __init__(self, *args: Any, **kwargs: Any) -> None:
+                    super().__init__(*args, **kwargs)
+
+                def __getitem__(self, key: Any) -> Any:
+                    item = super().__getitem__(key)
+                    # TensorVariable is an instance of LazyVariableTracker
+                    # But we have to handle it differently (there may be no value)
+                    return maybe_lazy_unwrap(item)
+
+            lazyKwargs = LazyRealizeArgsKwargs(
+                {key: maybe_lazy_unwrap(kwarg) for key, kwarg in kwargs.items()}
+            )
+            tempArgs = dict(zip(variable.kernel.arg_names, args))
+            lazyArgs = LazyRealizeArgsKwargs(
+                {key: maybe_lazy_unwrap(arg) for key, arg in tempArgs.items()}
+            )
+
+            # We need to wrap the results of the calling eachheuristic for Dynamo
+            from torch._dynamo.variables.builder import SourcelessBuilder
+
+            # variable.kernel.values = []
+            # unwrap the heuristics decorator, we don't need it anymore
+            # variable.kernel ==> Autotuner
+            # variable.kernel.fn ==> Heuristics
+            # ...
+            # There can be arbitrarily many heuristics wrappers here!
+            # ...
+            # variable.kernel.fn ==> JITFunction
+            # assert that tx is not None for the type checker
+            assert tx is not None
+            iter_kernel = variable.kernel.fn
+            while isinstance(iter_kernel, Heuristics):
+                for v, heuristic_fn in iter_kernel.values.items():
+                    kwargs[v] = SourcelessBuilder.create(
+                        tx, heuristic_fn({**lazyArgs, **lazyKwargs})
+                    )
+                iter_kernel = iter_kernel.fn
+
+            variable.kernel.fn = iter_kernel
+            assert isinstance(variable.kernel.fn, JITFunction)
 
         special_kwargs = {}
         for name in SPECIAL_CONFIG_NAMES:
