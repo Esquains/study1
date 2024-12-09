@@ -12535,7 +12535,7 @@ if HAS_GPU and not TEST_WITH_ASAN:
             def f(a, b):
                 return a+b
             N = 512
-            inps = (
+            inps = (config
                 torch.randn(N, device=GPU_TYPE),
                 torch.randn(N, device=GPU_TYPE)
             )
