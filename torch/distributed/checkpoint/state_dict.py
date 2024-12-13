@@ -150,9 +150,9 @@ class StateDictOptions:
 
 @dataclass
 class _StateDictInfo(StateDictOptions):
-    fqn_param_mapping: Dict[
-        Union[str, torch.Tensor], Union[FQNS_T, torch.Tensor]
-    ] = field(default_factory=dict)
+    fqn_param_mapping: Dict[Union[str, torch.Tensor], Union[FQNS_T, torch.Tensor]] = (
+        field(default_factory=dict)
+    )
     shared_params_mapping: Dict[
         Union[str, torch.Tensor], Union[FQNS_T, torch.Tensor]
     ] = field(default_factory=dict)
@@ -286,9 +286,9 @@ def _verify_options(
 
     options = options or StateDictOptions()
 
-    fqn_param_mapping: Dict[
-        Union[str, torch.Tensor], Union[Set[str], torch.Tensor]
-    ] = {}
+    fqn_param_mapping: Dict[Union[str, torch.Tensor], Union[Set[str], torch.Tensor]] = (
+        {}
+    )
     shared_params_mapping: Dict[
         Union[str, torch.Tensor], Union[Set[str], torch.Tensor]
     ] = {}
@@ -560,22 +560,33 @@ def _load_model_state_dict(
     assign = False
     if info.broadcast_from_rank0 or info.full_state_dict:
         device = None
+        devices = set()
         for key, value in local_state_dict.items():
             if torch.is_tensor(value) and value.dim() > 0:
-                if device is None:
-                    device = value.device
-                else:
-                    assert device == value.device
-        assert device is not None
-        if device == torch.device("meta"):
-            device = dist.distributed_c10d._get_pg_default_device()
+                devices.add(value.device)
+        if len(devices) == 1:
+            device = devices.pop()
+            if device == torch.device("meta"):
+                device = dist.distributed_c10d._get_pg_default_device()
+                assign = True
+        # In lora state_dict, ther could be multiple devices, with meta device inside
+        # take the other device in the broadcast/distribtue, and set assign to True
+        elif len(devices) == 2:
+            devices.remove(torch.device("meta"))
+            device = devices.pop()
             assign = True
+        else:
+            raise ValueError("Multiple devices found")
+
         if info.broadcast_from_rank0:
             _broadcast_state_dict(
                 state_dict, local_state_dict, device=device, strict=info.strict
             )
         elif info.full_state_dict:
             _distribute_state_dict(state_dict, local_state_dict, device=device)
+        if info.cpu_offload:
+            for fqn in local_state_dict.keys():
+                local_state_dict[fqn] = local_state_dict[fqn].to(torch.device("cpu"))
         for fqn, local_state in local_state_dict.items():
             state_dict[fqn] = local_state
 
