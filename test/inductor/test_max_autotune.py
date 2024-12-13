@@ -1131,7 +1131,7 @@ class TestPrologueFusion(TestCase):
     @config.patch(realize_reads_threshold=1, realize_opcount_threshold=1)
     @parametrize("benchmark_fusion", (True, False))
     def test_prologue_read_into_both_inputs(self, benchmark_fusion):
-        M = K = N = 256
+        M = K = 256
 
         # not supported today. it could be, but typically the pointwise nodes would get
         # inlined into separate nodes.
