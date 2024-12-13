@@ -14,12 +14,11 @@ namespace at::meta {
 
 TORCH_META_FUNC(lerp_Tensor)(
     const Tensor& self, const Tensor& end, const Tensor& weight) {
-  TORCH_CHECK(self.dtype() == end.dtype(), "expected dtype ", self.dtype(),
-              " for `end` but got dtype ", end.dtype());
-  TORCH_CHECK(self.dtype() == weight.dtype(), "expected dtype ", self.dtype(),
-              " for `weight` but got dtype ", weight.dtype());
+  bool all_same_dtype = (self.dtype() == end.dtype() && self.dtype() == weight.dtype());
+
   build(at::TensorIteratorConfig()
         .allow_cpu_scalars(true)
+        .promote_inputs_to_common_dtype(!all_same_dtype)
         .add_output(maybe_get_output())
         .add_const_input(self)
         .add_const_input(end)
@@ -28,8 +27,6 @@ TORCH_META_FUNC(lerp_Tensor)(
 
 TORCH_META_FUNC(lerp_Scalar)(
     const Tensor& self, const Tensor& end, const Scalar& /*weight*/) {
-  TORCH_CHECK(self.dtype() == end.dtype(), "expected dtype ", self.dtype(),
-              " for `end` but got dtype ", end.dtype());
   build_binary_op(maybe_get_output(), self, end);
 }
 
