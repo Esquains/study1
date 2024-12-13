@@ -47,10 +47,12 @@ from torch._C._dynamo.guards import (
     install_no_tensor_aliasing_guard,
     install_object_aliasing_guard,
     install_storage_overlapping_guard,
+    install_symbolic_shape_guard,
     profile_guard_manager,
     RootGuardManager,
 )
 from torch._dynamo.source import (
+    IndexedSource,
     is_from_flatten_script_object_source,
     is_from_local_source,
     is_from_optimizer_source,
@@ -85,10 +87,13 @@ from .source import (
     AttrProxySource,
     AttrSource,
     CallFunctionNoArgsSource,
+    CallMethodItemSource,
     ChainedSource,
+    ConstantSource,
     ConstDictKeySource,
     DefaultsSource,
     FlattenScriptObjectSource,
+    FloatTensorSource,
     FSDPNNModuleSource,
     GetItemSource,
     GlobalSource,
@@ -1039,6 +1044,25 @@ class GuardBuilder(GuardBuilderBase):
                     example_value=example_value,
                     guard_manager_enum=guard_manager_enum,
                 )
+        elif istype(source, TensorPropertySource):
+            out = getattr(
+                base_guard_manager,
+                f"tensor_property_{source.prop.name.lower()}_manager",
+            )(
+                idx=source.idx,
+                source=source_name,
+                example_value=example_value,
+                guard_manager_enum=guard_manager_enum,
+            )
+        elif istype(source, IndexedSource):
+            assert base_guard_manager  # to make mypy happy
+
+            out = base_guard_manager.indexed_manager(
+                idx=source.idx,
+                source=source_name,
+                example_value=example_value,
+                guard_manager_enum=guard_manager_enum,
+            )
         elif istype(source, GetItemSource):
             assert base_guard_manager  # to make mypy happy
             if isinstance(base_example_value, (dict, collections.OrderedDict)):
@@ -1178,6 +1202,22 @@ class GuardBuilder(GuardBuilderBase):
             assert base_guard_manager  # to make mypy happy
             out = base_guard_manager.lambda_manager(
                 python_lambda=lambda x: x.get_base(),
+                source=source_name,
+                example_value=example_value,
+                guard_manager_enum=guard_manager_enum,
+            )
+        elif istype(source, CallMethodItemSource):
+            assert base_guard_manager  # to make mypy happy
+            out = base_guard_manager.lambda_manager(
+                python_lambda=lambda x: x.item(),
+                source=source_name,
+                example_value=example_value,
+                guard_manager_enum=guard_manager_enum,
+            )
+        elif istype(source, FloatTensorSource):
+            assert base_guard_manager  # to make mypy happy
+            out = base_guard_manager.lambda_manager(
+                python_lambda=lambda x: torch._as_tensor_fullprec(x),
                 source=source_name,
                 example_value=example_value,
                 guard_manager_enum=guard_manager_enum,
@@ -1877,6 +1917,103 @@ class GuardBuilder(GuardBuilderBase):
                 ignore_static=(not self.check_fn_manager.output_graph.export),
                 lang=lang,
             )
+
+        if config.enable_cpp_symbolic_shape_guards:
+            import ctypes
+
+            from torch._inductor.codecache import CppCodeCache
+
+            cpp_code_parts, verbose_code_parts = _get_code_parts("cpp")
+
+            code_parts, source_to_symbol = (
+                cpp_code_parts.exprs,
+                cpp_code_parts.source_to_symbol,
+            )
+
+            if not code_parts:
+                return
+
+            int_source_to_symbol = []
+            float_source_to_symbol = []
+
+            python_fallback = False
+            for source, symbol in source_to_symbol.items():
+                if isinstance(source, ConstantSource):
+                    python_fallback = True
+                else:
+                    example_value = self.get(source.name())
+                    if isinstance(example_value, int):
+                        int_source_to_symbol.append((source, symbol))
+                    elif isinstance(example_value, float):
+                        float_source_to_symbol.append((source, symbol))
+                    else:
+                        # SymInts/SymFloats go through python guard as we only support
+                        # int64_t/double in C++ guards for now.
+                        python_fallback = True
+
+            if not python_fallback:
+                source_to_symbol = dict(int_source_to_symbol + float_source_to_symbol)
+                try:
+                    guard_managers = [
+                        self.get_guard_manager_from_source(IndexedSource(source, i))
+                        for i, source in enumerate(source_to_symbol)
+                    ]
+
+                    int_symbols_str = ", ".join(
+                        f"{symbol} = int_values[{i}]"
+                        for i, (_, symbol) in enumerate(int_source_to_symbol)
+                    )
+                    float_symbols_str = ", ".join(
+                        f"{symbol} = float_values[{i}]"
+                        for i, (_, symbol) in enumerate(float_source_to_symbol)
+                    )
+
+                    if int_symbols_str:
+                        int_symbols_str = f"int64_t {int_symbols_str};"
+                    if float_symbols_str:
+                        float_symbols_str = f"double {float_symbols_str};"
+
+                    func_str = textwrap.dedent(
+                        f"""
+                    #include <cstdint>
+                    #include <cmath>
+                    #include <c10/util/generic_math.h>
+
+                    extern "C" int8_t guard(int64_t *int_values, double *float_values) {{
+                      {int_symbols_str}
+                      {float_symbols_str}
+                      return ({") && (".join(code_parts)});
+                    }}
+                    """
+                    )
+                    clib = CppCodeCache.load(func_str)
+                    cguard = ctypes.cast(clib.guard, ctypes.c_void_p).value
+                    assert cguard
+                except torch._inductor.exc.InvalidCxxCompiler:
+                    # No valid C++ compiler to compile the shape guard
+                    python_fallback = True
+                else:
+                    # When exporting, we may work with the shape constraints some more in
+                    # postprocessing, so don't freeze yet
+                    if not self.check_fn_manager.output_graph.export:
+                        output_graph.shape_env.freeze()
+
+                    for code in code_parts:
+                        self._set_guard_export_info(guard, [code])
+
+                    # Make ShapeEnv guards available for testing.
+                    if compile_context := CompileContext.try_get():
+                        compile_context.shape_env_guards.extend(verbose_code_parts)
+
+                    install_symbolic_shape_guard(
+                        guard_managers,
+                        len(int_source_to_symbol),
+                        len(float_source_to_symbol),
+                        cguard,
+                        clib,
+                        verbose_code_parts,
+                    )
+                    return
 
         python_code_parts, verbose_code_parts = _get_code_parts("python")
         code_parts = python_code_parts.exprs
