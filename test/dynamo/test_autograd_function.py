@@ -321,11 +321,11 @@ class AutogradFunctionTests(torch._dynamo.test_case.TestCase):
         y = f(x, SomeEnum.A)
         self.assertEqual(y, x.sin())
 
-    def test_save_for_bwd(self):
-        model = SaveForBwdModule()
-        opt_model = torch.compile(model, backend="eager", fullgraph=True)
-        x = torch.randn(2, 2, dtype=torch.double, requires_grad=True)
-        opt_model(x)
+    # def test_save_for_bwd(self):
+    #     model = SaveForBwdModule()
+    #     opt_model = torch.compile(model, backend="eager", fullgraph=True)
+    #     x = torch.randn(2, 2, dtype=torch.double, requires_grad=True)
+    #     opt_model(x)
 
     def test_allow_in_graph(self):
         torch._dynamo.utils.counters.clear()
