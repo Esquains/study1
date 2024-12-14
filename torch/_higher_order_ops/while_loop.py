@@ -154,10 +154,12 @@ def while_loop(cond_fn, body_fn, carried_inputs):
 
         validate_subgraph_args_types(flat_inputs)
 
-        if not pytree.tree_all(lambda t: isinstance(t, torch.Tensor), carried_inputs):
+        if not pytree.tree_all(
+            lambda t: isinstance(t, (torch.Tensor, torch.SymInt, int)), carried_inputs
+        ):
             raise RuntimeError(
                 "Expect carried_inputs to be a tuple of possibly nested dict/list/tuple that only"
-                f"consists of tensor leaves, but got {carried_inputs}."
+                f"consists of tensor or int leaves, but got {carried_inputs}."
             )
 
     _validate_input(cond_fn, body_fn, carried_inputs)
@@ -320,7 +322,7 @@ def while_loop_tracing(mode, cond_fn, body_fn, carried_inputs, additional_inputs
     )
 
 
-def check_outputs_carry_consistency(
+def check_meta_consistency(
     outs: List[Union[torch.Tensor, torch.SymInt, int]],
     carries: List[Union[torch.Tensor, torch.SymInt, int]],
 ) -> None:
@@ -345,6 +347,10 @@ def check_outputs_carry_consistency(
                 )
             return ""
 
+        if len(lhs_list) != len(rhs_list):
+            raise torch._dynamo.exc.UncapturedHigherOrderOpError(
+                f"Expected to have same number of outputs but got lhs:{lhs_list} and rhs:{rhs_list}"
+            )
         assert len(lhs_list) == len(rhs_list)
         all_diffs = []
         for i, (lhs, rhs) in enumerate(zip(lhs_list, rhs_list)):
@@ -356,8 +362,8 @@ def check_outputs_carry_consistency(
 
     if all_diffs := diff_meta_pairs(outs, carries):
         diff_str = "\n".join(all_diffs)
-        raise RuntimeError(
-            f"Expected carried_inputs and body outputs return tensors with same metadata but found:\n{diff_str}"
+        raise torch._dynamo.exc.UncapturedHigherOrderOpError(
+            f"Expected to return tensors with same metadata but found:\n{diff_str}"
         )
 
 
@@ -401,7 +407,7 @@ def while_loop_fake_tensor_mode(
             # body_fn return output with the same pytree and tensor meta data as carried_inputs
             # so we could just return the output after one iteration.
             body_outs = body_fn(*carried_inputs, *additional_inputs)
-            check_outputs_carry_consistency(body_outs, carried_inputs)
+            check_meta_consistency(body_outs, carried_inputs)
         # See NOTE [unspecialize int carry with unbacked symints]
         return pytree.tree_map_only(
             (int, torch.SymInt), lambda _: _create_unbacked_symint(), body_outs
