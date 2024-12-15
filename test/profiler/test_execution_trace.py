@@ -17,7 +17,7 @@ import json
 import sys
 import tempfile
 import unittest
-from typing import Any, Dict, List
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -50,7 +50,7 @@ from torch.testing._internal.common_utils import (
 from torch.utils._triton import has_triton
 
 
-Json = Dict[str, Any]
+Json = dict[str, Any]
 
 
 class TestExecutionTrace(TestCase):
@@ -96,7 +96,7 @@ class TestExecutionTrace(TestCase):
             nodes = et_graph["nodes"]
         return nodes
 
-    def get_execution_trace_rf_ids(self, nodes: List[Json]) -> List[int]:
+    def get_execution_trace_rf_ids(self, nodes: list[Json]) -> list[int]:
         """Returns a sorted list of rf_id (record function ids) in execution trace"""
 
         def get_rf_id(node):
@@ -114,7 +114,7 @@ class TestExecutionTrace(TestCase):
         )
         return sorted(rf_id for rf_id in rf_ids_ if rf_id is not None)
 
-    def get_kineto_rf_ids(self, events: List[Json]) -> List[int]:
+    def get_kineto_rf_ids(self, events: list[Json]) -> list[int]:
         """Returns a sorted list of Record function IDs for CPU operators and user annotations"""
         ops_and_annotations = (
             e for e in events if e.get("cat", "") in ["cpu_op", "user_annotation"]
