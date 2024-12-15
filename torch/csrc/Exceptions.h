@@ -263,7 +263,7 @@ TORCH_PYTHON_API void translate_exception_to_python(const std::exception_ptr&);
 TORCH_PYTHON_API std::string processErrorMsg(std::string str);
 
 // Abstract base class for exceptions which translate to specific Python types
-struct PyTorchError : public std::exception {
+struct TORCH_PYTHON_API PyTorchError : public std::exception {
   PyTorchError() = default;
   PyTorchError(std::string msg_) : msg(std::move(msg_)) {}
   virtual PyObject* python_type() = 0;
@@ -283,16 +283,16 @@ struct PyTorchError : public std::exception {
 #endif
 
 // Translates to Python TypeError
-struct TypeError : public PyTorchError {
+struct TORCH_PYTHON_API TypeError : public PyTorchError {
   using PyTorchError::PyTorchError;
-  TORCH_PYTHON_API TypeError(const char* format, ...) TORCH_FORMAT_FUNC(2, 3);
+  TypeError(const char* format, ...) TORCH_FORMAT_FUNC(2, 3);
   PyObject* python_type() override {
     return PyExc_TypeError;
   }
 };
 
 // Translates to Python AttributeError
-struct AttributeError : public PyTorchError {
+struct TORCH_PYTHON_API AttributeError : public PyTorchError {
   AttributeError(const char* format, ...) TORCH_FORMAT_FUNC(2, 3);
   PyObject* python_type() override {
     return PyExc_AttributeError;
@@ -300,7 +300,7 @@ struct AttributeError : public PyTorchError {
 };
 
 // ATen warning handler for Python
-struct PyWarningHandler {
+struct TORCH_PYTHON_API PyWarningHandler {
   // Move actual handler into a separate class with a noexcept
   // destructor. Otherwise, we need to force all WarningHandler
   // subclasses to have a noexcept(false) destructor.
