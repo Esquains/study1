@@ -1957,6 +1957,7 @@ class Scheduler:
         self.process_grouped_nodes()
         self.compute_last_usage()
         V.debug.ir_post_fusion(self.nodes)
+        V.debug.log_inductor_triton_kernel_to_post_grad_node_info()
         V.debug.graph_diagram(self.nodes)
         self.debug_draw_graph()
 
